@@ -1,0 +1,13 @@
+name = "webhook-gateway-worker"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[vars]
+AUTHENTIK_ISSUER = "https://auth.yourdomain.com/application/o/your-app"
+AUTHENTIK_CLIENT_ID = "your-client-id"
+TELEGRAM_BACKEND = "https://telegram-bot.yourdomain.com"
+WHATSAPP_BACKEND = "https://whatsapp-bot.yourdomain.com"
+N8N_BACKEND = "https://n8n.yourdomain.com"
+
+# Secrets will be set via CLI (see step 3)
