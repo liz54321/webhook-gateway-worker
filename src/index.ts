@@ -1,10 +1,5 @@
-// Simplified worker that routes everything to n8n
+// Truly simplified worker - no security checks, just forwards everything
 interface Env {
-  AUTHENTIK_ISSUER: string;
-  AUTHENTIK_CLIENT_ID: string;
-  TELEGRAM_SECRET_TOKEN: string;
-  WHATSAPP_VERIFY_TOKEN: string;
-  WHATSAPP_APP_SECRET: string;
   N8N_BACKEND: string;
 }
 
@@ -24,109 +19,89 @@ export default {
       } else if (path.startsWith('/webhook/')) {
         return await handleN8nWebhook(request, env);
       } else {
-        return new Response('Webhook Gateway Active', { 
+        return new Response('Webhook Gateway Active - Simplified Version', {
           status: 200,
           headers: { 'Content-Type': 'text/plain' }
         });
       }
     } catch (error) {
       console.error('Error processing request:', error);
-      return new Response('Internal Server Error', { status: 500 });
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      return new Response(`Internal Server Error: ${errorMessage}`, { status: 500 });
     }
   },
 };
 
 async function handleTelegram(request: Request, env: Env): Promise<Response> {
-  // Verify Telegram webhook secret
-  const secretToken = request.headers.get('x-telegram-bot-api-secret-token');
-  if (secretToken !== env.TELEGRAM_SECRET_TOKEN) {
-    return new Response('Unauthorized', { status: 401 });
-  }
-
-  // Forward directly to n8n telegram webhook
+  // No security check - directly forward to n8n
+  console.log('Forwarding Telegram request to n8n');
   const n8nUrl = `${env.N8N_BACKEND}/webhook/telegram`;
-  
   return await forwardRequest(request, n8nUrl);
 }
 
 async function handleWhatsApp(request: Request, env: Env): Promise<Response> {
   if (request.method === 'GET') {
-    // Handle WhatsApp webhook verification
+    // Simple WhatsApp verification - accept any challenge
     const url = new URL(request.url);
-    const mode = url.searchParams.get('hub.mode');
-    const token = url.searchParams.get('hub.verify_token');
     const challenge = url.searchParams.get('hub.challenge');
-
-    if (mode === 'subscribe' && token === env.WHATSAPP_VERIFY_TOKEN) {
+    
+    if (challenge) {
+      console.log('WhatsApp verification - returning challenge');
       return new Response(challenge, { status: 200 });
     } else {
-      return new Response('Forbidden', { status: 403 });
+      return new Response('Missing challenge parameter', { status: 400 });
     }
   }
 
-  // Verify WhatsApp webhook signature for POST requests
-  if (request.method === 'POST') {
-    const signature = request.headers.get('x-hub-signature-256');
-    if (signature && env.WHATSAPP_APP_SECRET) {
-      const body = await request.clone().text();
-      if (!await verifyWhatsAppSignature(body, signature, env.WHATSAPP_APP_SECRET)) {
-        return new Response('Unauthorized', { status: 401 });
-      }
-    }
-
-    // Forward to n8n WhatsApp webhook
-    const n8nUrl = `${env.N8N_BACKEND}/webhook/whatsapp`;
-    return await forwardRequest(request, n8nUrl);
-  }
-
-  return new Response('Method not allowed', { status: 405 });
+  // For POST requests, forward to n8n
+  console.log('Forwarding WhatsApp request to n8n');
+  const n8nUrl = `${env.N8N_BACKEND}/webhook/whatsapp`;
+  return await forwardRequest(request, n8nUrl);
 }
 
 async function handleN8nWebhook(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const webhookPath = url.pathname.substring('/webhook/'.length);
-  
+
+  console.log(`Forwarding webhook /${webhookPath} to n8n`);
+
   // Forward to n8n with the webhook path
   const n8nUrl = `${env.N8N_BACKEND}/webhook/${webhookPath}${url.search}`;
-  
+
   return await forwardRequest(request, n8nUrl);
 }
 
 async function forwardRequest(request: Request, targetUrl: string): Promise<Response> {
+  console.log(`Forwarding ${request.method} to ${targetUrl}`);
+
   const headers = new Headers(request.headers);
-  
+
   // Remove hop-by-hop headers
   headers.delete('connection');
   headers.delete('upgrade');
-  
-  const response = await fetch(targetUrl, {
-    method: request.method,
-    headers: headers,
-    body: request.method !== 'GET' ? await request.clone().arrayBuffer() : null,
-  });
+  headers.delete('host'); // Let fetch set the correct host
 
-  // Return the response from n8n
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers: response.headers,
-  });
-}
+  try {
+    const response = await fetch(targetUrl, {
+      method: request.method,
+      headers: headers,
+      body: request.method !== 'GET' ? await request.clone().arrayBuffer() : null,
+    });
 
-async function verifyWhatsAppSignature(body: string, signature: string, secret: string): Promise<boolean> {
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    'raw',
-    encoder.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' },
-    false,
-    ['sign']
-  );
+    console.log(`n8n responded with status: ${response.status}`);
 
-  const hmac = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
-  const expectedSignature = 'sha256=' + Array.from(new Uint8Array(hmac))
-    .map(b => b.toString(16).padStart(2, '0'))
-    .join('');
-
-  return expectedSignature === signature;
+    // Return the response from n8n
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  } catch (error) {
+    console.error('Error forwarding to n8n:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    return new Response(`Error forwarding to n8n: ${errorMessage}`, {
+      status: 502,
+      headers: { 'Content-Type': 'text/plain' }
+    });
+  }
 }
